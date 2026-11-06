@@ -79,7 +79,6 @@ class PrinterService {
               return Result.failure(error: result.error!);
             }
           } else if (match != null) {
-            // Update reference to the new scan instance without reconnecting
             selectedPrinter = match;
           }
         }
@@ -186,8 +185,18 @@ class PrinterService {
     try {
       final ticket = await Ticket.create(paperSize);
 
+      // TAN TECIE - OPTION B: Department from description
+      // Cashier will save description as CAKE SHOP or BEAUTY & WELLNESS
+      final desc = (transaction.description ?? '').toUpperCase();
+      String department = 'CAKE SHOP & BEAUTY & WELLNESS';
+      if (desc.contains('CAKE')) {
+        department = 'CAKE SHOP';
+      } else if (desc.contains('BEAUTY') || desc.contains('WELLNESS')) {
+        department = 'BEAUTY & WELLNESS';
+      }
+
       ticket.text(
-        'FLUTTER POS',
+        'TAN TECIE',
         align: PrintAlign.center,
         style: const PrintTextStyle(
           bold: true,
@@ -196,7 +205,14 @@ class PrinterService {
         ),
       );
       ticket.text(
-        'https://github.com/elrizwiraswara/flutter_pos',
+        department,
+        align: PrintAlign.center,
+        style: const PrintTextStyle(
+          bold: true,
+        ),
+      );
+      ticket.text(
+        'Murehwa',
         align: PrintAlign.center,
         style: PrintTextStyle(
           fontType: FontType.fontB,
@@ -210,9 +226,9 @@ class PrinterService {
       );
 
       ticket.text('Date: $date');
-      ticket.text('Trx. ID: #${transaction.id}');
+      ticket.text('Receipt No: #${transaction.id}');
       ticket.text('Customer: ${transaction.customerName ?? '-'}');
-      ticket.text('Created by: ${transaction.createdBy?.name ?? '-'}');
+      ticket.text('Cashier: ${transaction.createdBy?.name ?? '-'}');
 
       ticket.separator();
 
@@ -287,7 +303,7 @@ class PrinterService {
       ]);
       ticket.row([
         PrintColumn(
-          text: 'Pay (${transaction.paymentMethod})',
+          text: 'Cash Given (${transaction.paymentMethod})',
           flex: 2,
         ),
         PrintColumn(
@@ -298,21 +314,23 @@ class PrinterService {
       ]);
       ticket.row([
         PrintColumn(
-          text: 'Change',
+          text: 'Change Given Back',
           flex: 2,
+          style: const PrintTextStyle(bold: true),
         ),
         PrintColumn(
           text: CurrencyFormatter.format(transaction.returnAmount),
           flex: 1,
           align: PrintAlign.right,
+          style: const PrintTextStyle(bold: true),
         ),
       ]);
 
       ticket.emptyLines();
       ticket.qrcode('${transaction.id}', size: QRSize.size3);
       ticket.emptyLines();
-      ticket.text('Thank you for your purchase!', align: PrintAlign.center);
-      ticket.text('Yatta!', align: PrintAlign.center);
+      ticket.text('Thank you for shopping with TAN TECIE!', align: PrintAlign.center);
+      ticket.text('Come Again!', align: PrintAlign.center);
       ticket.cut(linesBefore: 2);
 
       return await printTicket(ticket);
@@ -340,13 +358,9 @@ class PrinterService {
       ticket.emptyLines(3);
 
       ticket.text(
-        'FLUTTER POS PRINT TEST OK',
+        'TAN TECIE PRINT TEST OK',
         align: PrintAlign.center,
         style: const PrintTextStyle(bold: true),
-      );
-      await ticket.textRaster(
-        'ありがとうございます',
-        align: PrintAlign.center,
       );
 
       ticket.emptyLines(3);
