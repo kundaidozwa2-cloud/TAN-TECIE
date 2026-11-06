@@ -52,7 +52,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void scrollListener() async {
     final productsState = ref.read(productsNotifierProvider);
 
-    // Automatically load more data on end of scroll position
     if (scrollController.offset == scrollController.position.maxScrollExtent) {
       await ref
           .read(productsNotifierProvider.notifier)
@@ -103,7 +102,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-class _Body extends ConsumerWidget {
+// TAN TECIE - TWO SIDES FILTER: Changed to Stateful to hold selected filter
+class _Body extends ConsumerStatefulWidget {
   final ScrollController scrollController;
   final TextEditingController searchFieldController;
   final Future<void> Function() onRefresh;
@@ -115,9 +115,70 @@ class _Body extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_Body> createState() => _BodyState();
+}
+
+class _BodyState extends ConsumerState<_Body> {
+  // ALL / CAKE SHOP / BEAUTY & WELLNESS
+  String _selectedFilter = 'ALL';
+
+  // How we decide which side a product belongs to:
+  // We check product name + description for keywords.
+  // TIP: Name your products like "Cake - Chocolate Cake" or "Beauty - Lotion"
+  // Or put CAKE / BEAUTY in product description when you create product.
+  bool _matchesFilter(ProductEntity product) {
+    if (_selectedFilter == 'ALL') return true;
+    final text = '${product.name} ${product.description ?? ''}'.toLowerCase();
+    if (_selectedFilter == 'CAKE SHOP') {
+      // If product has CAKE keyword, show it. If it has BEAUTY keyword, hide it.
+      if (text.contains('beauty') || text.contains('wellness') || text.contains('lotion') || text.contains('cream') || text.contains('soap') || text.contains('shampoo')) return false;
+      // If product name clearly says cake / bread / muffin etc, show it
+      if (text.contains('cake') || text.contains('bread') || text.contains('muffin') || text.contains('cupcake') || text.contains('pie') || text.contains('donut') || text.contains('biscuit') || text.contains('cookie')) return true;
+      // If no keyword at all, show in CAKE by default (so old products still show)
+      // Change this to false if you want strict filtering
+      return true;
+    }
+    if (_selectedFilter == 'BEAUTY & WELLNESS') {
+      if (text.contains('beauty') || text.contains('wellness') || text.contains('lotion') || text.contains('cream') || text.contains('soap') || text.contains('shampoo') || text.contains('oil') || text.contains('perfume') || text.contains('makeup') || text.contains('hair')) return true;
+      return false;
+    }
+    return true;
+  }
+
+  Widget _filterChip(String label) {
+    final isSelected = _selectedFilter == label;
+    final colorScheme = Theme.of(context).colorScheme;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _selectedFilter = label),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+          decoration: BoxDecoration(
+            color: isSelected ? colorScheme.primary : colorScheme.surface,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: colorScheme.primary, width: 1.2),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: isSelected ? Colors.white : colorScheme.primary,
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final allProducts = ref.watch(productsNotifierProvider.select((p) => p.allProducts));
     final isLoadingMore = ref.watch(productsNotifierProvider.select((p) => p.isLoadingMore));
+
+    // Filtered list
+    final filteredProducts = allProducts?.where(_matchesFilter).toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -130,12 +191,11 @@ class _Body extends ConsumerWidget {
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: onRefresh,
+        onRefresh: widget.onRefresh,
         child: Scrollbar(
           child: CustomScrollView(
-            controller: scrollController,
-            // Disable scroll when data is null or empty
-            physics: (allProducts?.isEmpty ?? true) ? const NeverScrollableScrollPhysics() : null,
+            controller: widget.scrollController,
+            physics: (filteredProducts?.isEmpty ?? true) ? const NeverScrollableScrollPhysics() : null,
             slivers: [
               SliverAppBar(
                 floating: true,
@@ -145,7 +205,46 @@ class _Body extends ConsumerWidget {
                 titleSpacing: 0,
                 title: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: AppSizes.padding),
-                  child: _SearchField(controller: searchFieldController),
+                  child: _SearchField(controller: widget.searchFieldController),
+                ),
+              ),
+              // TAN TECIE - TWO SIDES FILTER BAR
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(AppSizes.padding, 4, AppSizes.padding, 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'TAN TECIE - Shop',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          _filterChip('ALL'),
+                          const SizedBox(width: 6),
+                          _filterChip('CAKE SHOP'),
+                          const SizedBox(width: 6),
+                          _filterChip('BEAUTY & WELLNESS'),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _selectedFilter == 'ALL'
+                            ? 'Showing all products'
+                            : _selectedFilter == 'CAKE SHOP'
+                                ? 'Showing Cake Shop products - tap BEAUTY to switch'
+                                : 'Showing Beauty & Wellness products - tap CAKE to switch',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               SliverLayoutBuilder(
@@ -161,14 +260,16 @@ class _Body extends ConsumerWidget {
                     );
                   }
 
-                  if (allProducts.isEmpty) {
+                  if (filteredProducts == null || filteredProducts.isEmpty) {
                     return SliverFillRemaining(
                       hasScrollBody: false,
                       fillOverscroll: true,
                       child: Padding(
                         padding: const EdgeInsets.only(bottom: 140),
                         child: AppEmptyState(
-                          subtitle: 'No products available, add product to continue',
+                          subtitle: _selectedFilter == 'ALL'
+                              ? 'No products available, add product to continue'
+                              : 'No products in $_selectedFilter yet. Tap ALL to see all, or add product with $_selectedFilter in name/description.',
                           buttonText: 'Add Product',
                           onTapButton: () => context.push('/products/product-create'),
                         ),
@@ -185,9 +286,9 @@ class _Body extends ConsumerWidget {
                         crossAxisSpacing: AppSizes.padding / 2,
                         mainAxisSpacing: AppSizes.padding / 2,
                       ),
-                      itemCount: allProducts.length,
+                      itemCount: filteredProducts.length,
                       itemBuilder: (context, i) {
-                        return _ProductCard(product: allProducts[i]);
+                        return _ProductCard(product: filteredProducts[i]);
                       },
                     ),
                   );
