@@ -109,6 +109,19 @@ class _AdditionalInfoDialogState extends ConsumerState<_AdditionalInfoDialog> {
   final _customerController = TextEditingController();
   final _descriptionController = TextEditingController();
 
+  // TAN TECIE - OPTION B: Default to CAKE SHOP, cashier can tap to change
+  String _selectedDepartment = 'CAKE SHOP';
+
+  @override
+  void initState() {
+    super.initState();
+    // Set default department so receipt always has one
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(homeNotifierProvider.notifier).onChangedDescription(_selectedDepartment);
+      _descriptionController.text = _selectedDepartment;
+    });
+  }
+
   @override
   void dispose() {
     _amountController.dispose();
@@ -121,6 +134,8 @@ class _AdditionalInfoDialogState extends ConsumerState<_AdditionalInfoDialog> {
     required GoRouter router,
     required HomeNotifier homeNotifier,
   }) async {
+    // Make sure department is saved before creating transaction
+    homeNotifier.onChangedDescription(_selectedDepartment);
     var res = await AppDialog.showProgress(() {
       return homeNotifier.createTransaction();
     });
@@ -132,21 +147,98 @@ class _AdditionalInfoDialogState extends ConsumerState<_AdditionalInfoDialog> {
     }
   }
 
+  Widget _departmentButton({
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+          decoration: BoxDecoration(
+            color: isSelected ? colorScheme.primary : colorScheme.surface,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: colorScheme.primary,
+              width: 1.5,
+            ),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: isSelected ? Colors.white : colorScheme.primary,
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final homeState = ref.watch(homeNotifierProvider);
     final homeNotifier = ref.read(homeNotifierProvider.notifier);
+    final total = homeNotifier.getTotalAmount();
+    final received = int.tryParse(_amountController.text) ?? 0;
+    final change = received >= total ? received - total : 0;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // TAN TECIE - OPTION B SELECTOR
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'Shop - TAN TECIE *',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            _departmentButton(
+              label: 'CAKE SHOP',
+              isSelected: _selectedDepartment == 'CAKE SHOP',
+              onTap: () {
+                setState(() {
+                  _selectedDepartment = 'CAKE SHOP';
+                  _descriptionController.text = 'CAKE SHOP';
+                });
+                homeNotifier.onChangedDescription('CAKE SHOP');
+              },
+            ),
+            const SizedBox(width: 10),
+            _departmentButton(
+              label: 'BEAUTY & WELLNESS',
+              isSelected: _selectedDepartment == 'BEAUTY & WELLNESS',
+              onTap: () {
+                setState(() {
+                  _selectedDepartment = 'BEAUTY & WELLNESS';
+                  _descriptionController.text = 'BEAUTY & WELLNESS';
+                });
+                homeNotifier.onChangedDescription('BEAUTY & WELLNESS');
+              },
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSizes.padding),
         AppTextField(
           autofocus: true,
           keyboardType: TextInputType.number,
           controller: _amountController,
-          labelText: 'Received Amount',
-          hintText: 'Received amount...',
+          labelText: 'Received Amount / Cash Given',
+          hintText: 'Cash given...',
           onChanged: (val) {
+            setState(() {});
             homeNotifier.onChangedReceivedAmount(int.tryParse(val) ?? 0);
           },
         ),
@@ -174,11 +266,33 @@ class _AdditionalInfoDialogState extends ConsumerState<_AdditionalInfoDialog> {
           onChanged: (v) => homeNotifier.onChangedCustomerName(v),
         ),
         const SizedBox(height: AppSizes.padding),
-        AppTextField(
-          controller: _descriptionController,
-          labelText: 'Description (Optional)',
-          hintText: 'Description...',
-          onChanged: (v) => homeNotifier.onChangedDescription(v),
+        // Show total + change live so cashier sees it before Pay
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Total:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text(CurrencyFormatter.format(total), style: const TextStyle(fontWeight: FontWeight.bold)),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Change Given Back:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text(CurrencyFormatter.format(change), style: const TextStyle(fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: AppSizes.padding * 1.5),
         Row(
@@ -198,7 +312,7 @@ class _AdditionalInfoDialogState extends ConsumerState<_AdditionalInfoDialog> {
             Expanded(
               flex: 2,
               child: AppButton(
-                text: 'Pay',
+                text: 'Pay - $_selectedDepartment',
                 enabled: (int.tryParse(_amountController.text) ?? 0) >= homeNotifier.getTotalAmount(),
                 onTap: () {
                   final router = ref.read(appRoutesProvider).router;
