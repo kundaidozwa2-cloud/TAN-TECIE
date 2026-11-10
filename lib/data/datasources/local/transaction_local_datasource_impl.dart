@@ -17,63 +17,83 @@ class TransactionLocalDatasourceImpl extends TransactionDatasource {
   @override
   Future<Result<int>> createTransaction(TransactionModel transaction) async {
     try {
-      final transactionId = await _databaseService.database.transaction((trx) async {
-        // Create transaction
+      await _databaseService.database.transaction((trx) async {
+        final existing = await trx.query(
+          DatabaseConfig.transactionTableName,
+          where: 'id = ?',
+          whereArgs: [transaction.id],
+        );
+        if (existing.isNotEmpty) {
+          throw StateError('This transaction ID already exists.');
+        }
+
+        final items = transaction.orderedProducts ?? [];
+        final quantities = <int, int>{};
+
+        for (final item in items) {
+          if (item.quantity <= 0) {
+            throw StateError('Product quantity must be greater than zero.');
+          }
+          quantities[item.productId] =
+              (quantities[item.productId] ?? 0) + item.quantity;
+        }
+
+        for (final entry in quantities.entries) {
+          final rows = await trx.query(
+            DatabaseConfig.productTableName,
+            where: 'id = ?',
+            whereArgs: [entry.key],
+          );
+          if (rows.isEmpty) {
+            throw StateError('A product in this sale no longer exists.');
+          }
+
+          final product = ProductModel.fromJson(rows.first);
+          if (product.stock < entry.value) {
+            throw StateError(
+              'Insufficient stock for ${product.name}. Available: ${product.stock}, requested: ${entry.value}.',
+            );
+          }
+        }
+
         await trx.insert(
           DatabaseConfig.transactionTableName,
           transaction.toJson()
             ..remove('orderedProducts')
             ..remove('createdBy'),
-          conflictAlgorithm: ConflictAlgorithm.replace,
+          conflictAlgorithm: ConflictAlgorithm.abort,
         );
 
-        if (transaction.orderedProducts?.isNotEmpty ?? false) {
-          // Use batch for better performance
-          var batch = trx.batch();
+        for (final entry in quantities.entries) {
+          final rows = await trx.query(
+            DatabaseConfig.productTableName,
+            where: 'id = ?',
+            whereArgs: [entry.key],
+          );
+          final product = ProductModel.fromJson(rows.first);
 
-          for (var orderedProduct in transaction.orderedProducts!) {
-            // Create ordered product
-            orderedProduct.transactionId = transaction.id;
-
-            batch.insert(
-              DatabaseConfig.orderedProductTableName,
-              orderedProduct.toJson(),
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            );
-
-            // Get product
-            var rawProduct = await trx.query(
-              DatabaseConfig.productTableName,
-              where: 'id = ?',
-              whereArgs: [orderedProduct.productId],
-            );
-
-            if (rawProduct.isEmpty) continue;
-
-            var product = ProductModel.fromJson(rawProduct.first);
-
-            // Update product stock and sold
-            int stock = product.stock - orderedProduct.quantity;
-            int sold = product.sold + orderedProduct.quantity;
-
-            batch.update(
-              DatabaseConfig.productTableName,
-              {'stock': stock, 'sold': sold},
-              where: 'id = ?',
-              whereArgs: [product.id],
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            );
-          }
-
-          // Commit batch operations
-          await batch.commit(noResult: true);
+          await trx.update(
+            DatabaseConfig.productTableName,
+            {
+              'stock': product.stock - entry.value,
+              'sold': product.sold + entry.value,
+            },
+            where: 'id = ?',
+            whereArgs: [entry.key],
+          );
         }
 
-        // The id has been generated in models
-        return transaction.id;
+        for (final item in items) {
+          item.transactionId = transaction.id;
+          await trx.insert(
+            DatabaseConfig.orderedProductTableName,
+            item.toJson(),
+            conflictAlgorithm: ConflictAlgorithm.abort,
+          );
+        }
       });
 
-      return Result.success(data: transactionId);
+      return Result.success(data: transaction.id);
     } catch (e) {
       return Result.failure(error: e);
     }
@@ -83,7 +103,79 @@ class TransactionLocalDatasourceImpl extends TransactionDatasource {
   Future<Result<void>> updateTransaction(TransactionModel transaction) async {
     try {
       await _databaseService.database.transaction((trx) async {
-        // Update transaction
+        final existing = await trx.query(
+          DatabaseConfig.transactionTableName,
+          where: 'id = ?',
+          whereArgs: [transaction.id],
+        );
+        if (existing.isEmpty) {
+          throw StateError('Cannot edit a sale that does not exist.');
+        }
+
+        final oldItems = await trx.query(
+          DatabaseConfig.orderedProductTableName,
+          where: 'transactionId = ?',
+          whereArgs: [transaction.id],
+        );
+
+        // Restore the original sale quantities before applying the revision.
+        final oldQuantities = <int, int>{};
+        for (final row in oldItems) {
+          final item = OrderedProductModel.fromJson(row);
+          oldQuantities[item.productId] =
+              (oldQuantities[item.productId] ?? 0) + item.quantity;
+        }
+
+        for (final entry in oldQuantities.entries) {
+          final rows = await trx.query(
+            DatabaseConfig.productTableName,
+            where: 'id = ?',
+            whereArgs: [entry.key],
+          );
+          if (rows.isNotEmpty) {
+            final product = ProductModel.fromJson(rows.first);
+            await trx.update(
+              DatabaseConfig.productTableName,
+              {
+                'stock': product.stock + entry.value,
+                'sold': (product.sold - entry.value).clamp(0, 2147483647),
+              },
+              where: 'id = ?',
+              whereArgs: [entry.key],
+            );
+          }
+        }
+
+        final newItems = transaction.orderedProducts ?? [];
+        final newQuantities = <int, int>{};
+
+        for (final item in newItems) {
+          if (item.quantity <= 0) {
+            throw StateError('Product quantity must be greater than zero.');
+          }
+          newQuantities[item.productId] =
+              (newQuantities[item.productId] ?? 0) + item.quantity;
+        }
+
+        // Check all revised quantities before deducting any stock.
+        for (final entry in newQuantities.entries) {
+          final rows = await trx.query(
+            DatabaseConfig.productTableName,
+            where: 'id = ?',
+            whereArgs: [entry.key],
+          );
+          if (rows.isEmpty) {
+            throw StateError('A product in this revised sale does not exist.');
+          }
+
+          final product = ProductModel.fromJson(rows.first);
+          if (product.stock < entry.value) {
+            throw StateError(
+              'Insufficient stock for ${product.name}. Available: ${product.stock}, requested: ${entry.value}.',
+            );
+          }
+        }
+
         await trx.update(
           DatabaseConfig.transactionTableName,
           transaction.toJson()
@@ -91,48 +183,40 @@ class TransactionLocalDatasourceImpl extends TransactionDatasource {
             ..remove('createdBy'),
           where: 'id = ?',
           whereArgs: [transaction.id],
-          conflictAlgorithm: ConflictAlgorithm.replace,
         );
 
-        if (transaction.orderedProducts?.isNotEmpty ?? false) {
-          // Use batch for better performance
-          var batch = trx.batch();
+        await trx.delete(
+          DatabaseConfig.orderedProductTableName,
+          where: 'transactionId = ?',
+          whereArgs: [transaction.id],
+        );
 
-          for (var orderedProduct in transaction.orderedProducts!) {
-            // Update ordered product - Added proper where clause
-            batch.update(
-              DatabaseConfig.orderedProductTableName,
-              orderedProduct.toJson(),
-              where: 'id = ?',
-              whereArgs: [orderedProduct.id],
-            );
+        for (final entry in newQuantities.entries) {
+          final rows = await trx.query(
+            DatabaseConfig.productTableName,
+            where: 'id = ?',
+            whereArgs: [entry.key],
+          );
+          final product = ProductModel.fromJson(rows.first);
 
-            // Get product
-            var rawProduct = await trx.query(
-              DatabaseConfig.productTableName,
-              where: 'id = ?',
-              whereArgs: [orderedProduct.productId],
-            );
+          await trx.update(
+            DatabaseConfig.productTableName,
+            {
+              'stock': product.stock - entry.value,
+              'sold': product.sold + entry.value,
+            },
+            where: 'id = ?',
+            whereArgs: [entry.key],
+          );
+        }
 
-            if (rawProduct.isEmpty) continue;
-
-            var product = ProductModel.fromJson(rawProduct.first);
-
-            // Update product stock and sold
-            int stock = product.stock - orderedProduct.quantity;
-            int sold = product.sold + orderedProduct.quantity;
-
-            batch.update(
-              DatabaseConfig.productTableName,
-              {'stock': stock, 'sold': sold},
-              where: 'id = ?',
-              whereArgs: [product.id],
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            );
-          }
-
-          // Commit batch operations
-          await batch.commit(noResult: true);
+        for (final item in newItems) {
+          item.transactionId = transaction.id;
+          await trx.insert(
+            DatabaseConfig.orderedProductTableName,
+            item.toJson(),
+            conflictAlgorithm: ConflictAlgorithm.abort,
+          );
         }
       });
 
@@ -146,48 +230,55 @@ class TransactionLocalDatasourceImpl extends TransactionDatasource {
   Future<Result<void>> deleteTransaction(int id) async {
     try {
       await _databaseService.database.transaction((trx) async {
-        // Get ordered products to revert stock
-        var orderedProducts = await trx.query(
+        final existing = await trx.query(
+          DatabaseConfig.transactionTableName,
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+        if (existing.isEmpty) {
+          throw StateError('This transaction does not exist.');
+        }
+
+        final rows = await trx.query(
           DatabaseConfig.orderedProductTableName,
           where: 'transactionId = ?',
           whereArgs: [id],
         );
 
-        // Revert stock for each ordered product
-        for (var orderedProductMap in orderedProducts) {
-          var orderedProduct = OrderedProductModel.fromJson(orderedProductMap);
+        final quantities = <int, int>{};
+        for (final row in rows) {
+          final item = OrderedProductModel.fromJson(row);
+          quantities[item.productId] =
+              (quantities[item.productId] ?? 0) + item.quantity;
+        }
 
-          // Get current product data
-          var productResults = await trx.query(
+        for (final entry in quantities.entries) {
+          final products = await trx.query(
             DatabaseConfig.productTableName,
             where: 'id = ?',
-            whereArgs: [orderedProduct.productId],
+            whereArgs: [entry.key],
           );
 
-          if (productResults.isNotEmpty) {
-            var product = ProductModel.fromJson(productResults.first);
-
-            int revertedStock = product.stock + orderedProduct.quantity;
-            int revertedSold = product.sold - orderedProduct.quantity;
-
-            // Update product stock and sold count
+          if (products.isNotEmpty) {
+            final product = ProductModel.fromJson(products.first);
             await trx.update(
               DatabaseConfig.productTableName,
-              {'stock': revertedStock, 'sold': revertedSold},
+              {
+                'stock': product.stock + entry.value,
+                'sold': (product.sold - entry.value).clamp(0, 2147483647),
+              },
               where: 'id = ?',
-              whereArgs: [orderedProduct.productId],
+              whereArgs: [entry.key],
             );
           }
         }
 
-        // Delete related ordered products
         await trx.delete(
           DatabaseConfig.orderedProductTableName,
           where: 'transactionId = ?',
           whereArgs: [id],
         );
 
-        // Then delete the transaction
         await trx.delete(
           DatabaseConfig.transactionTableName,
           where: 'id = ?',

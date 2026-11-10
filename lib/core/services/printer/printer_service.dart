@@ -185,18 +185,15 @@ class PrinterService {
     try {
       final ticket = await Ticket.create(paperSize);
 
-      // TAN TECIE - OPTION B: Department from description
-      // Cashier will save description as CAKE SHOP or BEAUTY & WELLNESS
+      // Tan Tecie department-specific receipt heading.
       final desc = (transaction.description ?? '').toUpperCase();
-      String department = 'CAKE SHOP & BEAUTY & WELLNESS';
-      if (desc.contains('CAKE')) {
-        department = 'CAKE SHOP';
-      } else if (desc.contains('BEAUTY') || desc.contains('WELLNESS')) {
-        department = 'BEAUTY & WELLNESS';
-      }
+      final isBeauty = desc.contains('BEAUTY') || desc.contains('WELLNESS');
+      final department = isBeauty
+          ? 'BEAUTY AND WELLNESS TAN TECIE'
+          : 'CAKE SHOP TAN TECIE';
 
       ticket.text(
-        'TAN TECIE',
+        department,
         align: PrintAlign.center,
         style: const PrintTextStyle(
           bold: true,
@@ -204,17 +201,11 @@ class PrinterService {
           width: TextSize.size2,
         ),
       );
+
       ticket.text(
-        department,
+        'MUREHWA',
         align: PrintAlign.center,
         style: const PrintTextStyle(
-          bold: true,
-        ),
-      );
-      ticket.text(
-        'Murehwa',
-        align: PrintAlign.center,
-        style: PrintTextStyle(
           fontType: FontType.fontB,
         ),
       );

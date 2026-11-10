@@ -1,3 +1,4 @@
+import 'package:flutter_pos/core/services/database/database_config.dart';
 import 'package:flutter_pos/core/services/database/database_service.dart';
 import 'package:flutter_pos/data/datasources/local/transaction_local_datasource_impl.dart';
 import 'package:flutter_pos/data/models/ordered_product_model.dart';
@@ -10,27 +11,73 @@ void main() {
   late TransactionLocalDatasourceImpl datasource;
   late Database testDatabase;
 
-  setUpAll(() async {
-    // Initialize FFI (Foreign Function Interface) for SQFlite
-    sqfliteFfiInit();
-    // Change the default factory for unit testing calls to use FFI
-    databaseFactory = databaseFactoryFfi;
+  const userId = 'user123';
 
-    // Open an in-memory database for testing
-    testDatabase = await openDatabase(inMemoryDatabasePath, version: 1);
+  setUpAll(() {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  });
+
+  setUp(() async {
+    testDatabase = await openDatabase(
+      inMemoryDatabasePath,
+      version: 1,
+    );
 
     appDatabase = DatabaseService.instance;
-    await appDatabase.initTestDatabase(testDatabase: testDatabase);
+
+    await appDatabase.initTestDatabase(
+      testDatabase: testDatabase,
+    );
+
+    await testDatabase.insert(
+      DatabaseConfig.userTableName,
+      {'id': userId},
+    );
 
     datasource = TransactionLocalDatasourceImpl(appDatabase);
   });
 
-  const userId = "user123";
+  tearDown(() async {
+    await testDatabase.close();
+  });
+
+  Future<void> createSampleProduct({
+    int id = 1,
+    int stock = 50,
+    int sold = 10,
+  }) async {
+    await testDatabase.insert(
+      DatabaseConfig.productTableName,
+      {
+        'id': id,
+        'createdById': userId,
+        'name': 'Sample Product',
+        'imageUrl': '',
+        'stock': stock,
+        'sold': sold,
+        'price': 42,
+        'description': '',
+      },
+    );
+  }
+
+  Future<Map<String, Object?>> readProduct(int id) async {
+    final rows = await testDatabase.query(
+      DatabaseConfig.productTableName,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    return rows.first;
+  }
 
   TransactionModel createSampleTransaction({
     int id = 1,
     String createdById = userId,
     int totalAmount = 1,
+    int quantity = 1,
+    int productId = 1,
   }) {
     return TransactionModel(
       id: id,
@@ -42,10 +89,10 @@ void main() {
       totalOrderedProduct: 1,
       orderedProducts: [
         OrderedProductModel(
-          id: 1,
+          id: id,
           transactionId: id,
-          productId: 1,
-          quantity: 1,
+          productId: productId,
+          quantity: quantity,
           stock: 1,
           name: 'Sample Product',
           imageUrl: '',
@@ -56,176 +103,333 @@ void main() {
   }
 
   group('TransactionLocalDatasourceImpl', () {
-    // Test: createTransaction inserts the transaction into the database
     group('createTransaction', () {
-      test('should insert transaction into the database and return transaction id', () async {
-        final transaction = createSampleTransaction();
+      test('inserts a transaction successfully', () async {
+        await createSampleProduct();
 
+        final transaction = createSampleTransaction();
         final result = await datasource.createTransaction(transaction);
 
-        expect(result.data, equals(transaction.id));
+        expect(result.isSuccess, isTrue);
+        expect(result.data, transaction.id);
       });
 
-      test('should create multiple transactions successfully', () async {
-        final transaction1 = createSampleTransaction(id: 1);
-        final transaction2 = createSampleTransaction(id: 2);
+      test('creates multiple transactions successfully', () async {
+        await createSampleProduct();
 
-        final result1 = await datasource.createTransaction(transaction1);
-        final result2 = await datasource.createTransaction(transaction2);
-
-        expect(result1.data, equals(1));
-        expect(result2.data, equals(2));
-      });
-
-      test('should store ordered products with the transaction', () async {
-        final transaction = createSampleTransaction();
-
-        await datasource.createTransaction(transaction);
-        final retrieved = await datasource.getTransaction(transaction.id);
-
-        expect(retrieved.data?.orderedProducts, isNotEmpty);
-        expect(retrieved.data?.orderedProducts?.length, equals(1));
-        expect(retrieved.data?.orderedProducts?.first.productId, equals(1));
-      });
-    });
-
-    group('updateTransaction', () {
-      test('should update existing transaction in the database', () async {
-        final transaction = createSampleTransaction();
-        await datasource.createTransaction(transaction);
-
-        final updatedTransaction = createSampleTransaction(
-          id: transaction.id,
-          totalAmount: 100,
+        final first = await datasource.createTransaction(
+          createSampleTransaction(id: 1),
         );
 
-        await expectLater(
-          datasource.updateTransaction(updatedTransaction),
-          completes,
+        final second = await datasource.createTransaction(
+          createSampleTransaction(id: 2),
         );
 
-        final retrieved = await datasource.getTransaction(transaction.id);
-        expect(retrieved.data?.totalAmount, equals(100));
-      });
+        expect(first.isSuccess, isTrue);
+        expect(second.isSuccess, isTrue);
 
-      test('should complete even if transaction does not exist', () async {
-        final transaction = createSampleTransaction();
-        await datasource.createTransaction(transaction);
-
-        final updatedTransaction = createSampleTransaction(
-          id: transaction.id,
-          totalAmount: 100,
+        final rows = await testDatabase.query(
+          DatabaseConfig.transactionTableName,
         );
 
-        await expectLater(
-          datasource.updateTransaction(updatedTransaction),
-          completes,
-        );
+        expect(rows.length, 2);
       });
-    });
 
-    group('getTransaction', () {
-      test('should retrieve existing transaction from the database', () async {
+      test('stores ordered products with the transaction', () async {
+        await createSampleProduct();
+
         final transaction = createSampleTransaction();
-        await datasource.createTransaction(transaction);
 
-        final result = await datasource.getTransaction(transaction.id);
-
-        expect(result.data, isNotNull);
-        expect(result.data?.id, equals(transaction.id));
-        expect(result.data?.createdById, equals(userId));
-        expect(result.data?.paymentMethod, equals('Cash'));
-        expect(result.data?.totalAmount, equals(transaction.totalAmount));
-      });
-
-      test('should return null when transaction does not exist', () async {
-        final result = await datasource.getTransaction(999);
-
-        expect(result.data, isNull);
-      });
-
-      test('should retrieve transaction with all ordered products', () async {
-        final transaction = createSampleTransaction();
         await datasource.createTransaction(transaction);
 
         final result = await datasource.getTransaction(transaction.id);
 
         expect(result.data?.orderedProducts, isNotEmpty);
-        expect(result.data?.totalOrderedProduct, equals(1));
+        expect(result.data?.orderedProducts?.length, 1);
+        expect(result.data?.orderedProducts?.first.productId, 1);
+      });
+
+      test('deducts stock and increases sold quantity', () async {
+        await createSampleProduct();
+
+        final result = await datasource.createTransaction(
+          createSampleTransaction(quantity: 1),
+        );
+
+        final product = await readProduct(1);
+
+        expect(result.isSuccess, isTrue);
+        expect(product['stock'], 49);
+        expect(product['sold'], 11);
+      });
+
+      test('rejects a sale when stock is insufficient', () async {
+        await createSampleProduct(stock: 0);
+
+        final result = await datasource.createTransaction(
+          createSampleTransaction(quantity: 1),
+        );
+
+        final product = await readProduct(1);
+
+        expect(result.isFailure, isTrue);
+        expect(product['stock'], 0);
+        expect(product['sold'], 10);
+
+        final sales = await testDatabase.query(
+          DatabaseConfig.transactionTableName,
+        );
+
+        expect(sales, isEmpty);
+      });
+
+      test('rejects a sale for a nonexistent product', () async {
+        final result = await datasource.createTransaction(
+          createSampleTransaction(productId: 999),
+        );
+
+        expect(result.isFailure, isTrue);
+      });
+
+      test('rejects duplicate transaction IDs without deducting stock twice',
+          () async {
+        await createSampleProduct();
+
+        final transaction = createSampleTransaction();
+
+        final first = await datasource.createTransaction(transaction);
+        final second = await datasource.createTransaction(transaction);
+
+        final product = await readProduct(1);
+
+        expect(first.isSuccess, isTrue);
+        expect(second.isFailure, isTrue);
+        expect(product['stock'], 49);
+        expect(product['sold'], 11);
+      });
+
+      test('rejects zero quantity', () async {
+        await createSampleProduct();
+
+        final result = await datasource.createTransaction(
+          createSampleTransaction(quantity: 0),
+        );
+
+        expect(result.isFailure, isTrue);
+
+        final product = await readProduct(1);
+        expect(product['stock'], 50);
+      });
+    });
+
+    group('updateTransaction', () {
+      test('updates an existing transaction', () async {
+        await createSampleProduct();
+
+        final transaction = createSampleTransaction();
+
+        await datasource.createTransaction(transaction);
+
+        final updated = createSampleTransaction(
+          id: transaction.id,
+          totalAmount: 100,
+        );
+
+        final result = await datasource.updateTransaction(updated);
+
+        expect(result.isSuccess, isTrue);
+
+        final retrieved = await datasource.getTransaction(transaction.id);
+
+        expect(retrieved.data?.totalAmount, 100);
+      });
+
+      test('does not deduct stock twice when editing the same quantity',
+          () async {
+        await createSampleProduct();
+
+        final transaction = createSampleTransaction();
+
+        await datasource.createTransaction(transaction);
+
+        final updated = createSampleTransaction(
+          id: transaction.id,
+          quantity: 1,
+          totalAmount: 100,
+        );
+
+        final result = await datasource.updateTransaction(updated);
+        final product = await readProduct(1);
+
+        expect(result.isSuccess, isTrue);
+        expect(product['stock'], 49);
+        expect(product['sold'], 11);
+      });
+
+      test('correctly applies a revised quantity', () async {
+        await createSampleProduct();
+
+        final transaction = createSampleTransaction(quantity: 1);
+
+        await datasource.createTransaction(transaction);
+
+        final updated = createSampleTransaction(
+          id: transaction.id,
+          quantity: 2,
+          totalAmount: 84,
+        );
+
+        final result = await datasource.updateTransaction(updated);
+        final product = await readProduct(1);
+
+        expect(result.isSuccess, isTrue);
+        expect(product['stock'], 48);
+        expect(product['sold'], 12);
+      });
+
+      test('rejects editing a nonexistent transaction', () async {
+        await createSampleProduct();
+
+        final result = await datasource.updateTransaction(
+          createSampleTransaction(id: 999),
+        );
+
+        expect(result.isFailure, isTrue);
+
+        final product = await readProduct(1);
+        expect(product['stock'], 50);
+      });
+    });
+
+    group('getTransaction', () {
+      test('retrieves an existing transaction', () async {
+        await createSampleProduct();
+
+        final transaction = createSampleTransaction();
+
+        await datasource.createTransaction(transaction);
+
+        final result = await datasource.getTransaction(transaction.id);
+
+        expect(result.data, isNotNull);
+        expect(result.data?.id, transaction.id);
+        expect(result.data?.createdById, userId);
+        expect(result.data?.paymentMethod, 'Cash');
+        expect(result.data?.totalAmount, transaction.totalAmount);
+      });
+
+      test('returns null for a nonexistent transaction', () async {
+        final result = await datasource.getTransaction(999);
+
+        expect(result.data, isNull);
+      });
+
+      test('retrieves transaction with ordered products', () async {
+        await createSampleProduct();
+
+        final transaction = createSampleTransaction();
+
+        await datasource.createTransaction(transaction);
+
+        final result = await datasource.getTransaction(transaction.id);
+
+        expect(result.data?.orderedProducts, isNotEmpty);
+        expect(result.data?.totalOrderedProduct, 1);
       });
     });
 
     group('getAllUserTransactions', () {
-      test('should retrieve all transactions for a given user', () async {
-        final transaction1 = createSampleTransaction(id: 1);
-        final transaction2 = createSampleTransaction(id: 2);
+      test('retrieves all transactions belonging to a user', () async {
+        await createSampleProduct();
 
-        await datasource.createTransaction(transaction1);
-        await datasource.createTransaction(transaction2);
+        await datasource.createTransaction(
+          createSampleTransaction(id: 1),
+        );
+
+        await datasource.createTransaction(
+          createSampleTransaction(id: 2),
+        );
 
         final result = await datasource.getAllUserTransactions(userId);
 
         expect(result.data, isNotEmpty);
-        expect(result.data?.length, equals(2));
-        expect(result.data?.any((t) => t.id == 1), isTrue);
-        expect(result.data?.any((t) => t.id == 2), isTrue);
+        expect(result.data?.length, 2);
       });
 
-      test('should return empty list when user has no transactions', () async {
-        final result = await datasource.getAllUserTransactions('nonexistent_user');
+      test('returns an empty list for a user without transactions',
+          () async {
+        final result =
+            await datasource.getAllUserTransactions('nonexistent_user');
 
         expect(result.data, isEmpty);
       });
 
-      test('should not return transactions from other users', () async {
-        final transaction = createSampleTransaction();
-        await datasource.createTransaction(transaction);
+      test('does not return another user transactions', () async {
+        await createSampleProduct();
 
-        final result = await datasource.getAllUserTransactions('different_user');
+        await datasource.createTransaction(
+          createSampleTransaction(),
+        );
+
+        final result =
+            await datasource.getAllUserTransactions('different_user');
 
         expect(result.data, isEmpty);
       });
 
-      test('should retrieve transactions with ordered products', () async {
-        final transaction = createSampleTransaction();
-        await datasource.createTransaction(transaction);
+      test('retrieves transactions with ordered products', () async {
+        await createSampleProduct();
+
+        await datasource.createTransaction(
+          createSampleTransaction(),
+        );
 
         final result = await datasource.getAllUserTransactions(userId);
 
         expect(result.data?.first.orderedProducts, isNotEmpty);
-        expect(result.data?.first.orderedProducts?.length, equals(1));
+        expect(result.data?.first.orderedProducts?.length, 1);
       });
     });
 
     group('deleteTransaction', () {
-      test('should delete existing transaction from the database', () async {
+      test('deletes an existing transaction', () async {
+        await createSampleProduct();
+
         final transaction = createSampleTransaction();
+
         await datasource.createTransaction(transaction);
 
-        await expectLater(
-          datasource.deleteTransaction(transaction.id),
-          completes,
-        );
+        final result =
+            await datasource.deleteTransaction(transaction.id);
 
-        final retrieved = await datasource.getTransaction(transaction.id);
+        expect(result.isSuccess, isTrue);
+
+        final retrieved =
+            await datasource.getTransaction(transaction.id);
+
         expect(retrieved.data, isNull);
       });
 
-      test('should complete even if transaction does not exist', () async {
-        await expectLater(
-          datasource.deleteTransaction(999),
-          completes,
-        );
+      test('restores stock when a transaction is deleted', () async {
+        await createSampleProduct();
+
+        final transaction = createSampleTransaction();
+
+        await datasource.createTransaction(transaction);
+        final result =
+            await datasource.deleteTransaction(transaction.id);
+
+        final product = await readProduct(1);
+
+        expect(result.isSuccess, isTrue);
+        expect(product['stock'], 50);
+        expect(product['sold'], 10);
       });
 
-      test('should delete transaction and its ordered products', () async {
-        final transaction = createSampleTransaction();
-        await datasource.createTransaction(transaction);
+      test('rejects deletion of a nonexistent transaction', () async {
+        final result = await datasource.deleteTransaction(999);
 
-        await datasource.deleteTransaction(transaction.id);
-
-        final retrieved = await datasource.getTransaction(transaction.id);
-        expect(retrieved.data, isNull);
+        expect(result.isFailure, isTrue);
       });
     });
   });

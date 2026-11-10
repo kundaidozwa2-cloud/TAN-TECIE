@@ -10,6 +10,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Restore Firebase configuration
+        env:
+          FIREBASE_OPTIONS_DART_B64: ${{ secrets.FIREBASE_OPTIONS_DART_B64 }}
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          test -n "$FIREBASE_OPTIONS_DART_B64"
+          test -n "$GOOGLE_SERVICES_JSON_B64"
+          mkdir -p lib android/app
+          printf '%s' "$FIREBASE_OPTIONS_DART_B64" | base64 --decode > lib/firebase_options.dart
+          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
+          chmod 600 lib/firebase_options.dart android/app/google-services.json
+          test -s lib/firebase_options.dart
+          test -s android/app/google-services.json
+          python3 -m json.tool android/app/google-services.json > /dev/null
+
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
