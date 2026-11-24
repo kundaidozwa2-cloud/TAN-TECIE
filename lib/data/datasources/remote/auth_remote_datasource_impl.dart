@@ -4,8 +4,6 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../../core/common/result.dart';
 import '../../../core/constants/constants.dart';
-import '../../../core/utilities/platform_wrapper.dart';
-import '../../../firebase_options.dart';
 import '../../models/user_model.dart';
 import '../interfaces/auth_datasource.dart';
 
@@ -22,7 +20,7 @@ class AuthRemoteDataSourceImpl implements AuthDataSource {
   Future<Result<UserModel>> signInWithGoogle() async {
     try {
       await googleSignIn.initialize(
-        clientId: PlatformWrapper().isIOS ? DefaultFirebaseOptions.ios.iosClientId : null,
+        clientId: null,
         serverClientId: Constants.googleServerClientId,
       );
 
