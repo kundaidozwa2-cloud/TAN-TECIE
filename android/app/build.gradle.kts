@@ -5,7 +5,6 @@ plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
-    id("com.google.gms.google-services")
 }
 
 // val keystoreProperties = Properties()
@@ -63,6 +62,4 @@ flutter {
 
 dependencies {
     implementation("com.android.support:multidex:2.0.1")
-    implementation(platform("com.google.firebase:firebase-bom:33.16.0"))
-    implementation("com.google.firebase:firebase-analytics")
 }
